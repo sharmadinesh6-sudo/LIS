@@ -1,72 +1,852 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Request
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from typing import List, Optional, Dict, Any
 import uuid
-from datetime import datetime, timezone
-
+from datetime import datetime, timezone, timedelta
+from passlib.context import CryptContext
+import jwt
+import barcode
+from barcode.writer import ImageWriter
+from io import BytesIO
+import base64
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+# Security
+SECRET_KEY = os.environ.get('SECRET_KEY', 'your-secret-key-change-in-production')
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 480
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+security = HTTPBearer()
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Create the main app without a prefix
 app = FastAPI()
-
-# Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
+# ==================== MODELS ====================
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
-    
+class UserRole:
+    SUPER_ADMIN = "super_admin"
+    LAB_DIRECTOR = "lab_director"
+    QUALITY_MANAGER = "quality_manager"
+    PATHOLOGIST = "pathologist"
+    LAB_TECHNICIAN = "lab_technician"
+    RECEPTION = "reception"
+    DOCTOR = "doctor"
+    PATIENT = "patient"
+
+class User(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
+    email: EmailStr
+    name: str
+    role: str
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class UserCreate(BaseModel):
+    email: EmailStr
+    name: str
+    password: str
+    role: str
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    user: User
+
+class Patient(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    uhid: str
+    name: str
+    age: int
+    gender: str
+    phone: str
+    email: Optional[str] = None
+    address: Optional[str] = None
+    patient_type: str  # OPD, IPD
+    created_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class PatientCreate(BaseModel):
+    name: str
+    age: int
+    gender: str
+    phone: str
+    email: Optional[str] = None
+    address: Optional[str] = None
+    patient_type: str
+
+class TestItem(BaseModel):
+    test_id: str
+    test_name: str
+    price: float
+    tat_hours: int
+
+class Sample(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    sample_id: str
+    barcode: str
+    patient_id: str
+    patient_name: str
+    uhid: str
+    tests: List[TestItem]
+    sample_type: str  # Serum, Plasma, EDTA, Urine, etc.
+    collection_date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    status: str = "collected"  # collected, received, processing, on_machine, under_validation, approved, dispatched
+    collected_by: str
+    tat_deadline: datetime
+    is_rejected: bool = False
+    rejection_reason: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class SampleCreate(BaseModel):
+    patient_id: str
+    tests: List[TestItem]
+    sample_type: str
+
+class SampleStatusUpdate(BaseModel):
+    status: str
+
+class SampleRejection(BaseModel):
+    rejection_reason: str
+
+class TestParameter(BaseModel):
+    parameter_name: str
+    unit: str
+    ref_range_male: str
+    ref_range_female: str
+    ref_range_child: Optional[str] = None
+    critical_low: Optional[float] = None
+    critical_high: Optional[float] = None
+
+class TestConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    test_code: str
+    test_name: str
+    category: str
+    price: float
+    tat_hours: int
+    sample_type: str
+    parameters: List[TestParameter]
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class TestConfigCreate(BaseModel):
+    test_code: str
+    test_name: str
+    category: str
+    price: float
+    tat_hours: int
+    sample_type: str
+    parameters: List[TestParameter]
+
+class ResultParameter(BaseModel):
+    parameter_name: str
+    value: Optional[str] = None
+    unit: str
+    ref_range: str
+    status: str = "normal"  # normal, high, low, critical
+
+class TestResult(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    sample_id: str
+    patient_id: str
+    test_name: str
+    parameters: List[ResultParameter]
+    status: str = "draft"  # draft, under_review, approved, finalized
+    entered_by: str
+    reviewed_by: Optional[str] = None
+    approved_by: Optional[str] = None
+    has_critical_values: bool = False
+    interpretation: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class TestResultCreate(BaseModel):
+    sample_id: str
+    patient_id: str
+    test_name: str
+    parameters: List[ResultParameter]
+    interpretation: Optional[str] = None
+
+class TestResultUpdate(BaseModel):
+    parameters: Optional[List[ResultParameter]] = None
+    status: Optional[str] = None
+    interpretation: Optional[str] = None
+
+class QCEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    date: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    test_name: str
+    qc_type: str  # internal, external
+    level: str  # Level 1, Level 2, Level 3
+    lot_number: str
+    parameter: str
+    target_value: float
+    measured_value: float
+    deviation: float
+    status: str  # pass, fail
+    entered_by: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class QCEntryCreate(BaseModel):
+    test_name: str
+    qc_type: str
+    level: str
+    lot_number: str
+    parameter: str
+    target_value: float
+    measured_value: float
+
+class NABLDocument(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    document_type: str  # SOP, NCR, CAPA, Training, Audit
+    document_id: str
+    title: str
+    version: str
+    status: str  # draft, approved, archived
+    uploaded_by: str
+    approved_by: Optional[str] = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class NABLDocumentCreate(BaseModel):
+    document_type: str
+    document_id: str
+    title: str
+    version: str
+
+class AuditLog(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    user_name: str
+    user_role: str
+    action: str
+    module: str
+    details: Dict[str, Any]
+    ip_address: Optional[str] = None
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+class InventoryItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    item_name: str
+    item_type: str  # reagent, consumable
+    lot_number: str
+    quantity: int
+    unit: str
+    expiry_date: datetime
+    minimum_stock: int
+    supplier: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
-async def root():
-    return {"message": "Hello World"}
+class InventoryItemCreate(BaseModel):
+    item_name: str
+    item_type: str
+    lot_number: str
+    quantity: int
+    unit: str
+    expiry_date: datetime
+    minimum_stock: int
+    supplier: str
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
+# ==================== AUTH FUNCTIONS ====================
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        token = credentials.credentials
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid authentication credentials")
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except jwt.JWTError:
+        raise HTTPException(status_code=401, detail="Could not validate credentials")
     
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
+    user = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if user is None:
+        raise HTTPException(status_code=401, detail="User not found")
+    return User(**user)
+
+async def log_audit(user: User, action: str, module: str, details: Dict[str, Any], request: Request = None):
+    audit_log = AuditLog(
+        user_id=user.id,
+        user_name=user.name,
+        user_role=user.role,
+        action=action,
+        module=module,
+        details=details,
+        ip_address=request.client.host if request else None
+    )
+    doc = audit_log.model_dump()
     doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
+    await db.audit_logs.insert_one(doc)
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
+def generate_barcode_base64(barcode_text: str) -> str:
+    EAN = barcode.get_barcode_class('code128')
+    ean = EAN(barcode_text, writer=ImageWriter())
+    buffer = BytesIO()
+    ean.write(buffer)
+    buffer.seek(0)
+    return base64.b64encode(buffer.getvalue()).decode()
 
-# Include the router in the main app
+# ==================== AUTH ROUTES ====================
+
+@api_router.post("/auth/register", response_model=User)
+async def register(user_data: UserCreate):
+    existing = await db.users.find_one({"email": user_data.email}, {"_id": 0})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    hashed_password = get_password_hash(user_data.password)
+    user = User(
+        email=user_data.email,
+        name=user_data.name,
+        role=user_data.role
+    )
+    
+    doc = user.model_dump()
+    doc['password'] = hashed_password
+    doc['created_at'] = doc['created_at'].isoformat()
+    
+    await db.users.insert_one(doc)
+    return user
+
+@api_router.post("/auth/login", response_model=Token)
+async def login(credentials: UserLogin):
+    user_doc = await db.users.find_one({"email": credentials.email}, {"_id": 0})
+    if not user_doc:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    if not verify_password(credentials.password, user_doc['password']):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    if not user_doc.get('is_active', True):
+        raise HTTPException(status_code=401, detail="Account is inactive")
+    
+    user = User(**user_doc)
+    access_token = create_access_token(data={"sub": user.id})
+    
+    return Token(access_token=access_token, token_type="bearer", user=user)
+
+@api_router.get("/auth/me", response_model=User)
+async def get_me(current_user: User = Depends(get_current_user)):
+    return current_user
+
+# ==================== PATIENT ROUTES ====================
+
+@api_router.post("/patients", response_model=Patient)
+async def create_patient(patient_data: PatientCreate, current_user: User = Depends(get_current_user), request: Request = None):
+    # Generate UHID
+    count = await db.patients.count_documents({}) + 1
+    uhid = f"UHID{count:06d}"
+    
+    patient = Patient(
+        uhid=uhid,
+        name=patient_data.name,
+        age=patient_data.age,
+        gender=patient_data.gender,
+        phone=patient_data.phone,
+        email=patient_data.email,
+        address=patient_data.address,
+        patient_type=patient_data.patient_type,
+        created_by=current_user.id
+    )
+    
+    doc = patient.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    await db.patients.insert_one(doc)
+    
+    await log_audit(current_user, "CREATE", "patients", {"patient_id": patient.id, "uhid": uhid}, request)
+    
+    return patient
+
+@api_router.get("/patients", response_model=List[Patient])
+async def get_patients(skip: int = 0, limit: int = 100, search: str = None, current_user: User = Depends(get_current_user)):
+    query = {}
+    if search:
+        query = {"$or": [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"uhid": {"$regex": search, "$options": "i"}},
+            {"phone": {"$regex": search, "$options": "i"}}
+        ]}
+    
+    patients = await db.patients.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    for p in patients:
+        if isinstance(p['created_at'], str):
+            p['created_at'] = datetime.fromisoformat(p['created_at'])
+    return patients
+
+@api_router.get("/patients/{patient_id}", response_model=Patient)
+async def get_patient(patient_id: str, current_user: User = Depends(get_current_user)):
+    patient = await db.patients.find_one({"id": patient_id}, {"_id": 0})
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    if isinstance(patient['created_at'], str):
+        patient['created_at'] = datetime.fromisoformat(patient['created_at'])
+    return Patient(**patient)
+
+# ==================== SAMPLE ROUTES ====================
+
+@api_router.post("/samples", response_model=Sample)
+async def create_sample(sample_data: SampleCreate, current_user: User = Depends(get_current_user), request: Request = None):
+    patient = await db.patients.find_one({"id": sample_data.patient_id}, {"_id": 0})
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    
+    # Generate sample ID and barcode
+    count = await db.samples.count_documents({}) + 1
+    sample_id = f"SMP{count:08d}"
+    barcode_num = f"{count:012d}"
+    
+    # Calculate TAT deadline (use maximum TAT from tests)
+    max_tat = max([test.tat_hours for test in sample_data.tests])
+    tat_deadline = datetime.now(timezone.utc) + timedelta(hours=max_tat)
+    
+    sample = Sample(
+        sample_id=sample_id,
+        barcode=barcode_num,
+        patient_id=sample_data.patient_id,
+        patient_name=patient['name'],
+        uhid=patient['uhid'],
+        tests=[test.model_dump() for test in sample_data.tests],
+        sample_type=sample_data.sample_type,
+        collected_by=current_user.id,
+        tat_deadline=tat_deadline
+    )
+    
+    doc = sample.model_dump()
+    doc['collection_date'] = doc['collection_date'].isoformat()
+    doc['tat_deadline'] = doc['tat_deadline'].isoformat()
+    doc['created_at'] = doc['created_at'].isoformat()
+    await db.samples.insert_one(doc)
+    
+    await log_audit(current_user, "CREATE", "samples", {"sample_id": sample_id, "patient_id": sample_data.patient_id}, request)
+    
+    return sample
+
+@api_router.get("/samples", response_model=List[Sample])
+async def get_samples(skip: int = 0, limit: int = 100, status: str = None, current_user: User = Depends(get_current_user)):
+    query = {}
+    if status:
+        query["status"] = status
+    
+    samples = await db.samples.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
+    for s in samples:
+        if isinstance(s['collection_date'], str):
+            s['collection_date'] = datetime.fromisoformat(s['collection_date'])
+        if isinstance(s['tat_deadline'], str):
+            s['tat_deadline'] = datetime.fromisoformat(s['tat_deadline'])
+        if isinstance(s['created_at'], str):
+            s['created_at'] = datetime.fromisoformat(s['created_at'])
+    return samples
+
+@api_router.get("/samples/{sample_id}", response_model=Sample)
+async def get_sample(sample_id: str, current_user: User = Depends(get_current_user)):
+    sample = await db.samples.find_one({"id": sample_id}, {"_id": 0})
+    if not sample:
+        raise HTTPException(status_code=404, detail="Sample not found")
+    if isinstance(sample['collection_date'], str):
+        sample['collection_date'] = datetime.fromisoformat(sample['collection_date'])
+    if isinstance(sample['tat_deadline'], str):
+        sample['tat_deadline'] = datetime.fromisoformat(sample['tat_deadline'])
+    if isinstance(sample['created_at'], str):
+        sample['created_at'] = datetime.fromisoformat(sample['created_at'])
+    return Sample(**sample)
+
+@api_router.put("/samples/{sample_id}/status", response_model=Sample)
+async def update_sample_status(sample_id: str, status_update: SampleStatusUpdate, current_user: User = Depends(get_current_user), request: Request = None):
+    sample = await db.samples.find_one({"id": sample_id}, {"_id": 0})
+    if not sample:
+        raise HTTPException(status_code=404, detail="Sample not found")
+    
+    await db.samples.update_one({"id": sample_id}, {"$set": {"status": status_update.status}})
+    sample['status'] = status_update.status
+    
+    await log_audit(current_user, "UPDATE_STATUS", "samples", {"sample_id": sample_id, "new_status": status_update.status}, request)
+    
+    if isinstance(sample['collection_date'], str):
+        sample['collection_date'] = datetime.fromisoformat(sample['collection_date'])
+    if isinstance(sample['tat_deadline'], str):
+        sample['tat_deadline'] = datetime.fromisoformat(sample['tat_deadline'])
+    if isinstance(sample['created_at'], str):
+        sample['created_at'] = datetime.fromisoformat(sample['created_at'])
+    return Sample(**sample)
+
+@api_router.post("/samples/{sample_id}/reject", response_model=Sample)
+async def reject_sample(sample_id: str, rejection: SampleRejection, current_user: User = Depends(get_current_user), request: Request = None):
+    sample = await db.samples.find_one({"id": sample_id}, {"_id": 0})
+    if not sample:
+        raise HTTPException(status_code=404, detail="Sample not found")
+    
+    await db.samples.update_one({"id": sample_id}, {"$set": {
+        "is_rejected": True,
+        "rejection_reason": rejection.rejection_reason,
+        "status": "rejected"
+    }})
+    
+    sample['is_rejected'] = True
+    sample['rejection_reason'] = rejection.rejection_reason
+    sample['status'] = "rejected"
+    
+    await log_audit(current_user, "REJECT", "samples", {"sample_id": sample_id, "reason": rejection.rejection_reason}, request)
+    
+    if isinstance(sample['collection_date'], str):
+        sample['collection_date'] = datetime.fromisoformat(sample['collection_date'])
+    if isinstance(sample['tat_deadline'], str):
+        sample['tat_deadline'] = datetime.fromisoformat(sample['tat_deadline'])
+    if isinstance(sample['created_at'], str):
+        sample['created_at'] = datetime.fromisoformat(sample['created_at'])
+    return Sample(**sample)
+
+@api_router.get("/samples/{sample_id}/barcode")
+async def get_sample_barcode(sample_id: str, current_user: User = Depends(get_current_user)):
+    sample = await db.samples.find_one({"id": sample_id}, {"_id": 0})
+    if not sample:
+        raise HTTPException(status_code=404, detail="Sample not found")
+    
+    barcode_base64 = generate_barcode_base64(sample['barcode'])
+    return {"barcode": barcode_base64, "barcode_text": sample['barcode']}
+
+# ==================== TEST CONFIG ROUTES ====================
+
+@api_router.post("/tests", response_model=TestConfig)
+async def create_test_config(test_data: TestConfigCreate, current_user: User = Depends(get_current_user), request: Request = None):
+    test = TestConfig(**test_data.model_dump())
+    doc = test.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    await db.test_configs.insert_one(doc)
+    
+    await log_audit(current_user, "CREATE", "test_configs", {"test_id": test.id, "test_name": test.test_name}, request)
+    
+    return test
+
+@api_router.get("/tests", response_model=List[TestConfig])
+async def get_tests(current_user: User = Depends(get_current_user)):
+    tests = await db.test_configs.find({}, {"_id": 0}).to_list(1000)
+    for t in tests:
+        if isinstance(t['created_at'], str):
+            t['created_at'] = datetime.fromisoformat(t['created_at'])
+    return tests
+
+@api_router.get("/tests/{test_id}", response_model=TestConfig)
+async def get_test(test_id: str, current_user: User = Depends(get_current_user)):
+    test = await db.test_configs.find_one({"id": test_id}, {"_id": 0})
+    if not test:
+        raise HTTPException(status_code=404, detail="Test not found")
+    if isinstance(test['created_at'], str):
+        test['created_at'] = datetime.fromisoformat(test['created_at'])
+    return TestConfig(**test)
+
+# ==================== RESULTS ROUTES ====================
+
+@api_router.post("/results", response_model=TestResult)
+async def create_result(result_data: TestResultCreate, current_user: User = Depends(get_current_user), request: Request = None):
+    # Check for critical values
+    has_critical = any(p.status == "critical" for p in result_data.parameters)
+    
+    result = TestResult(
+        sample_id=result_data.sample_id,
+        patient_id=result_data.patient_id,
+        test_name=result_data.test_name,
+        parameters=[p.model_dump() for p in result_data.parameters],
+        interpretation=result_data.interpretation,
+        entered_by=current_user.id,
+        has_critical_values=has_critical
+    )
+    
+    doc = result.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    doc['updated_at'] = doc['updated_at'].isoformat()
+    await db.test_results.insert_one(doc)
+    
+    await log_audit(current_user, "CREATE", "test_results", {"result_id": result.id, "sample_id": result_data.sample_id, "has_critical": has_critical}, request)
+    
+    return result
+
+@api_router.get("/results", response_model=List[TestResult])
+async def get_results(sample_id: str = None, patient_id: str = None, status: str = None, current_user: User = Depends(get_current_user)):
+    query = {}
+    if sample_id:
+        query["sample_id"] = sample_id
+    if patient_id:
+        query["patient_id"] = patient_id
+    if status:
+        query["status"] = status
+    
+    results = await db.test_results.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    for r in results:
+        if isinstance(r['created_at'], str):
+            r['created_at'] = datetime.fromisoformat(r['created_at'])
+        if isinstance(r['updated_at'], str):
+            r['updated_at'] = datetime.fromisoformat(r['updated_at'])
+    return results
+
+@api_router.get("/results/{result_id}", response_model=TestResult)
+async def get_result(result_id: str, current_user: User = Depends(get_current_user)):
+    result = await db.test_results.find_one({"id": result_id}, {"_id": 0})
+    if not result:
+        raise HTTPException(status_code=404, detail="Result not found")
+    if isinstance(result['created_at'], str):
+        result['created_at'] = datetime.fromisoformat(result['created_at'])
+    if isinstance(result['updated_at'], str):
+        result['updated_at'] = datetime.fromisoformat(result['updated_at'])
+    return TestResult(**result)
+
+@api_router.put("/results/{result_id}", response_model=TestResult)
+async def update_result(result_id: str, update_data: TestResultUpdate, current_user: User = Depends(get_current_user), request: Request = None):
+    result = await db.test_results.find_one({"id": result_id}, {"_id": 0})
+    if not result:
+        raise HTTPException(status_code=404, detail="Result not found")
+    
+    update_fields = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    
+    if update_data.parameters:
+        update_fields["parameters"] = [p.model_dump() for p in update_data.parameters]
+        has_critical = any(p.status == "critical" for p in update_data.parameters)
+        update_fields["has_critical_values"] = has_critical
+    
+    if update_data.status:
+        update_fields["status"] = update_data.status
+        if update_data.status == "approved":
+            update_fields["approved_by"] = current_user.id
+        elif update_data.status == "under_review":
+            update_fields["reviewed_by"] = current_user.id
+    
+    if update_data.interpretation is not None:
+        update_fields["interpretation"] = update_data.interpretation
+    
+    await db.test_results.update_one({"id": result_id}, {"$set": update_fields})
+    
+    await log_audit(current_user, "UPDATE", "test_results", {"result_id": result_id, "updates": list(update_fields.keys())}, request)
+    
+    result.update(update_fields)
+    if isinstance(result['created_at'], str):
+        result['created_at'] = datetime.fromisoformat(result['created_at'])
+    if isinstance(result['updated_at'], str):
+        result['updated_at'] = datetime.fromisoformat(result['updated_at'])
+    return TestResult(**result)
+
+# ==================== QC ROUTES ====================
+
+@api_router.post("/qc", response_model=QCEntry)
+async def create_qc_entry(qc_data: QCEntryCreate, current_user: User = Depends(get_current_user), request: Request = None):
+    deviation = qc_data.measured_value - qc_data.target_value
+    deviation_percent = (deviation / qc_data.target_value) * 100 if qc_data.target_value != 0 else 0
+    
+    # Simple QC pass/fail logic (within ±10%)
+    status = "pass" if abs(deviation_percent) <= 10 else "fail"
+    
+    qc = QCEntry(
+        test_name=qc_data.test_name,
+        qc_type=qc_data.qc_type,
+        level=qc_data.level,
+        lot_number=qc_data.lot_number,
+        parameter=qc_data.parameter,
+        target_value=qc_data.target_value,
+        measured_value=qc_data.measured_value,
+        deviation=deviation,
+        status=status,
+        entered_by=current_user.id
+    )
+    
+    doc = qc.model_dump()
+    doc['date'] = doc['date'].isoformat()
+    doc['created_at'] = doc['created_at'].isoformat()
+    await db.qc_entries.insert_one(doc)
+    
+    await log_audit(current_user, "CREATE", "qc_entries", {"qc_id": qc.id, "test_name": qc.test_name, "status": status}, request)
+    
+    return qc
+
+@api_router.get("/qc", response_model=List[QCEntry])
+async def get_qc_entries(test_name: str = None, qc_type: str = None, current_user: User = Depends(get_current_user)):
+    query = {}
+    if test_name:
+        query["test_name"] = test_name
+    if qc_type:
+        query["qc_type"] = qc_type
+    
+    entries = await db.qc_entries.find(query, {"_id": 0}).sort("date", -1).limit(100).to_list(100)
+    for e in entries:
+        if isinstance(e['date'], str):
+            e['date'] = datetime.fromisoformat(e['date'])
+        if isinstance(e['created_at'], str):
+            e['created_at'] = datetime.fromisoformat(e['created_at'])
+    return entries
+
+# ==================== NABL DOCUMENTS ROUTES ====================
+
+@api_router.post("/nabl-documents", response_model=NABLDocument)
+async def create_nabl_document(doc_data: NABLDocumentCreate, current_user: User = Depends(get_current_user), request: Request = None):
+    doc = NABLDocument(
+        document_type=doc_data.document_type,
+        document_id=doc_data.document_id,
+        title=doc_data.title,
+        version=doc_data.version,
+        status="draft",
+        uploaded_by=current_user.id
+    )
+    
+    doc_dict = doc.model_dump()
+    doc_dict['created_at'] = doc_dict['created_at'].isoformat()
+    doc_dict['updated_at'] = doc_dict['updated_at'].isoformat()
+    await db.nabl_documents.insert_one(doc_dict)
+    
+    await log_audit(current_user, "CREATE", "nabl_documents", {"document_id": doc.id, "type": doc.document_type}, request)
+    
+    return doc
+
+@api_router.get("/nabl-documents", response_model=List[NABLDocument])
+async def get_nabl_documents(document_type: str = None, current_user: User = Depends(get_current_user)):
+    query = {}
+    if document_type:
+        query["document_type"] = document_type
+    
+    docs = await db.nabl_documents.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    for d in docs:
+        if isinstance(d['created_at'], str):
+            d['created_at'] = datetime.fromisoformat(d['created_at'])
+        if isinstance(d['updated_at'], str):
+            d['updated_at'] = datetime.fromisoformat(d['updated_at'])
+    return docs
+
+# ==================== INVENTORY ROUTES ====================
+
+@api_router.post("/inventory", response_model=InventoryItem)
+async def create_inventory_item(item_data: InventoryItemCreate, current_user: User = Depends(get_current_user), request: Request = None):
+    item = InventoryItem(**item_data.model_dump())
+    doc = item.model_dump()
+    doc['expiry_date'] = doc['expiry_date'].isoformat()
+    doc['created_at'] = doc['created_at'].isoformat()
+    await db.inventory.insert_one(doc)
+    
+    await log_audit(current_user, "CREATE", "inventory", {"item_id": item.id, "item_name": item.item_name}, request)
+    
+    return item
+
+@api_router.get("/inventory", response_model=List[InventoryItem])
+async def get_inventory(current_user: User = Depends(get_current_user)):
+    items = await db.inventory.find({}, {"_id": 0}).sort("item_name", 1).to_list(1000)
+    for i in items:
+        if isinstance(i['expiry_date'], str):
+            i['expiry_date'] = datetime.fromisoformat(i['expiry_date'])
+        if isinstance(i['created_at'], str):
+            i['created_at'] = datetime.fromisoformat(i['created_at'])
+    return items
+
+@api_router.get("/inventory/alerts")
+async def get_inventory_alerts(current_user: User = Depends(get_current_user)):
+    items = await db.inventory.find({}, {"_id": 0}).to_list(1000)
+    
+    low_stock = []
+    expiring_soon = []
+    
+    for item in items:
+        if isinstance(item['expiry_date'], str):
+            item['expiry_date'] = datetime.fromisoformat(item['expiry_date'])
+        if isinstance(item['created_at'], str):
+            item['created_at'] = datetime.fromisoformat(item['created_at'])
+        
+        if item['quantity'] <= item['minimum_stock']:
+            low_stock.append(item)
+        
+        days_to_expire = (item['expiry_date'] - datetime.now(timezone.utc)).days
+        if 0 <= days_to_expire <= 30:
+            expiring_soon.append({**item, "days_to_expire": days_to_expire})
+    
+    return {"low_stock": low_stock, "expiring_soon": expiring_soon}
+
+# ==================== AUDIT LOG ROUTES ====================
+
+@api_router.get("/audit-logs", response_model=List[AuditLog])
+async def get_audit_logs(module: str = None, skip: int = 0, limit: int = 100, current_user: User = Depends(get_current_user)):
+    query = {}
+    if module:
+        query["module"] = module
+    
+    logs = await db.audit_logs.find(query, {"_id": 0}).sort("timestamp", -1).skip(skip).limit(limit).to_list(limit)
+    for log in logs:
+        if isinstance(log['timestamp'], str):
+            log['timestamp'] = datetime.fromisoformat(log['timestamp'])
+    return logs
+
+# ==================== DASHBOARD STATS ====================
+
+@api_router.get("/dashboard/stats")
+async def get_dashboard_stats(current_user: User = Depends(get_current_user)):
+    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    total_patients = await db.patients.count_documents({})
+    total_samples_today = await db.samples.count_documents({
+        "created_at": {"$gte": today.isoformat()}
+    })
+    
+    pending_results = await db.test_results.count_documents({"status": "draft"})
+    critical_results = await db.test_results.count_documents({"has_critical_values": True, "status": {"$ne": "finalized"}})
+    
+    samples_by_status = {}
+    for status in ["collected", "received", "processing", "under_validation", "approved"]:
+        count = await db.samples.count_documents({"status": status})
+        samples_by_status[status] = count
+    
+    # TAT breaches
+    now_iso = datetime.now(timezone.utc).isoformat()
+    tat_breaches = await db.samples.count_documents({
+        "tat_deadline": {"$lt": now_iso},
+        "status": {"$nin": ["approved", "dispatched"]}
+    })
+    
+    return {
+        "total_patients": total_patients,
+        "total_samples_today": total_samples_today,
+        "pending_results": pending_results,
+        "critical_results": critical_results,
+        "samples_by_status": samples_by_status,
+        "tat_breaches": tat_breaches
+    }
+
+# ==================== INCLUDE ROUTER ====================
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -77,7 +857,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
