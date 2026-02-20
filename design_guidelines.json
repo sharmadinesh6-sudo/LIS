@@ -1,0 +1,174 @@
+{
+  "identity": {
+    "name": "E1",
+    "role": "Anti-AI Creative Designer",
+    "principles": [
+      "Fusion over Imitation: Medical precision meets Swiss typographic discipline.",
+      "Emotion First: Trust, Speed, and Alertness.",
+      "Content is King: Data clarity is the hero. No chart junk.",
+      "Zoom In: Focus on the 'Abnormal' values.",
+      "Negative Space: Use whitespace to reduce cognitive load in dense tables.",
+      "Contrast: Critical values must scream; normal values must whisper."
+    ],
+    "anti_patterns": [
+      "Purple/Teal CTAs (Use Medical Blue or Alert Red)",
+      "Center-Everything (Align left for scanability)",
+      "Gradient Overload (Flat, clean surfaces only)",
+      "Generic 'SaaS Blue' (Use a specific, deep 'Trust Blue')",
+      "Low contrast text (Medical data must be #000000 or #111827)"
+    ]
+  },
+  "typography": {
+    "fonts": {
+      "headings": {
+        "family": "Manrope",
+        "weights": ["600", "700"],
+        "purpose": "Headings, KPIs, and Data Values (Numbers look great in Manrope)",
+        "cdn": "https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap"
+      },
+      "body": {
+        "family": "Inter",
+        "weights": ["400", "500"],
+        "purpose": "Table data, labels, inputs (High legibility)",
+        "cdn": "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap"
+      },
+      "mono": {
+        "family": "JetBrains Mono",
+        "weights": ["400"],
+        "purpose": "Sample Barcodes, UIDs, Technical Logs",
+        "cdn": "https://fonts.googleapis.com/css2?family=JetBrains+Mono&display=swap"
+      }
+    },
+    "rules": [
+      "Headings (h1-h3) must use tight tracking (-0.02em).",
+      "Table numbers must be tabular-nums to align vertically.",
+      "Labels must be uppercase, text-xs, font-semibold, tracking-wider, and text-muted-foreground."
+    ]
+  },
+  "colors": {
+    "palette": {
+      "primary": {
+        "DEFAULT": "#0F172A", 
+        "foreground": "#F8FAFC",
+        "description": "Deep Slate (almost black) for confident, professional actions."
+      },
+      "brand": {
+        "DEFAULT": "#0ea5e9",
+        "light": "#e0f2fe",
+        "dark": "#0284c7",
+        "description": "Sky Blue - used for 'Active' states, links, and non-critical highlights."
+      },
+      "critical": {
+        "DEFAULT": "#DC2626",
+        "bg": "#FEF2F2",
+        "text": "#991B1B",
+        "description": "NABL MANDATORY: High Values & Critical Alerts."
+      },
+      "low": {
+        "DEFAULT": "#2563EB",
+        "bg": "#EFF6FF",
+        "text": "#1E40AF",
+        "description": "NABL MANDATORY: Low Values."
+      },
+      "normal": {
+        "DEFAULT": "#000000",
+        "muted": "#64748B",
+        "description": "NABL MANDATORY: Normal Values."
+      },
+      "background": {
+        "body": "#F1F5F9",
+        "card": "#FFFFFF",
+        "sidebar": "#0F172A"
+      }
+    },
+    "gradients": {
+      "active_tab": "linear-gradient(180deg, rgba(14, 165, 233, 0.1) 0%, rgba(14, 165, 233, 0) 100%)",
+      "critical_flash": "linear-gradient(45deg, #DC2626, #EF4444)"
+    }
+  },
+  "layout": {
+    "grid_system": "The Bento Grid - Mode B (High Density)",
+    "container_padding": "p-6 md:p-8",
+    "spacing_scale": {
+      "gap": "gap-6",
+      "section_margin": "mb-8"
+    },
+    "sidebar": {
+      "width": "w-64",
+      "bg": "bg-slate-900",
+      "text": "text-slate-300",
+      "active_item": "bg-slate-800 text-white border-l-4 border-sky-500"
+    },
+    "card_style": {
+      "rounded": "rounded-lg",
+      "border": "border border-slate-200",
+      "shadow": "shadow-sm hover:shadow-md transition-shadow duration-200"
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-slate-900 hover:bg-slate-800 text-white shadow-sm rounded-md px-4 py-2 font-medium transition-all active:scale-95",
+      "secondary": "bg-white border border-slate-200 hover:bg-slate-50 text-slate-900 shadow-sm rounded-md px-4 py-2 font-medium",
+      "destructive": "bg-red-600 hover:bg-red-700 text-white shadow-sm rounded-md px-4 py-2 font-medium",
+      "ghost": "hover:bg-slate-100 text-slate-700 hover:text-slate-900 rounded-md px-3 py-2"
+    },
+    "inputs": {
+      "base": "h-10 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm placeholder:text-slate-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+      "label": "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 mb-2 block"
+    },
+    "tables": {
+      "wrapper": "rounded-md border border-slate-200 overflow-hidden",
+      "header": "bg-slate-50 border-b border-slate-200 px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider",
+      "row": "border-b border-slate-100 hover:bg-slate-50/50 transition-colors",
+      "cell": "px-4 py-3 text-sm text-slate-700"
+    },
+    "status_badge": {
+      "base": "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+      "variants": {
+        "normal": "bg-slate-100 text-slate-800",
+        "pending": "bg-amber-100 text-amber-800",
+        "critical": "bg-red-100 text-red-800 animate-pulse",
+        "completed": "bg-emerald-100 text-emerald-800"
+      }
+    }
+  },
+  "motion": {
+    "transitions": "transition-all duration-200 ease-in-out",
+    "micro_interactions": {
+      "button_click": "active:scale-95",
+      "card_hover": "hover:-translate-y-1 hover:shadow-lg"
+    },
+    "page_transition": {
+      "initial": { "opacity": 0, "y": 10 },
+      "animate": { "opacity": 1, "y": 0 },
+      "exit": { "opacity": 0, "y": -10 }
+    }
+  },
+  "accessibility": {
+    "contrast": "Strict adherence to APCA standards. Critical alerts must have 4.5:1 contrast.",
+    "focus_ring": "focus-visible:ring-2 focus-visible:ring-slate-900 focus-visible:ring-offset-2",
+    "aria": "All icon-only buttons must have aria-label. Status changes must use aria-live regions."
+  },
+  "assets": {
+    "icons": "Lucide React (Default). Use stroke-width=1.5 for a refined, medical look.",
+    "logo_placeholder": "Use a text-based logo with 'Manrope' font: 'LIMS' + 'Pro' in bold."
+  },
+  "instructions_to_main_agent": [
+    "1. THEME: Use the 'Clinical Precision' theme. Clean, white, slate, and specific semantic colors for values.",
+    "2. DASHBOARD: Use a Sidebar layout. The main content area should have a light grey background (#F1F5F9).",
+    "3. TABLES: This is a data-heavy app. Spend extra effort on Table components. Use fixed headers, sortable columns, and clear pagination.",
+    "4. CRITICALS: Implement the 'Flashing Red' requirement for critical values using Tailwind's `animate-pulse` class on the background or badge.",
+    "5. FORMS: Group form fields logically (e.g., 'Patient Details', 'Sample Info'). Use Cards to separate these sections.",
+    "6. NABL COMPLIANCE: Ensure every critical action (Result Entry, Verification) has a 'Save & Verify' workflow, not just 'Save'.",
+    "7. EXPORTS: All pages MUST rely on `export default function PageName` and named exports for components.",
+    "8. TOASTS: Use `sonner` for all notifications.",
+    "9. DATA-TESTID: Add `data-testid` to all interactive elements."
+  ],
+  "universal_guidelines": [
+    "Do not use gradients for backgrounds.",
+    "Do not center align the app container.",
+    "Use 24px-32px padding inside cards.",
+    "Never use 'System Fonts' if possible, load Manrope/Inter from Google Fonts.",
+    "Use 'Slate' (Cool Grey) instead of 'Gray' (Neutral) for a more modern, tech feel."
+  ]
+}
