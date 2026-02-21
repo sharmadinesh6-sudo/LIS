@@ -9,9 +9,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
-import { createResult, getResults, getSamples, updateResult } from '@/lib/api';
+import { createResult, getResults, getSamples, updateResult, downloadReport } from '@/lib/api';
 import { toast } from 'sonner';
-import { Plus, AlertCircle, FileText } from 'lucide-react';
+import { Plus, AlertCircle, FileText, Download } from 'lucide-react';
 
 export default function ResultEntry() {
   const [results, setResults] = useState([]);
