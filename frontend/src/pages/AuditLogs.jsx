@@ -74,7 +74,7 @@ export default function AuditLogs() {
               <SelectValue placeholder="Filter by module" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">All Modules</SelectItem>
+              <SelectItem value="all">All Modules</SelectItem>
               <SelectItem value="patients">Patients</SelectItem>
               <SelectItem value="samples">Samples</SelectItem>
               <SelectItem value="test_results">Test Results</SelectItem>
