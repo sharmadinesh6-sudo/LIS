@@ -919,14 +919,6 @@ def generate_pdf_report(patient_data, sample_data, results_data):
     qr_buffer.seek(0)
     qr_image = RLImage(qr_buffer, width=1.2*inch, height=1.2*inch)
     
-    # Generate UHID Barcode
-    from reportlab.graphics.barcode import code128
-    barcode_drawing = Drawing(2.5*inch, 0.6*inch)
-    uhid_barcode = code128.Code128(patient_data['uhid'], barHeight=0.4*inch, barWidth=1.2)
-    uhid_barcode.x = 0
-    uhid_barcode.y = 0
-    barcode_drawing.add(uhid_barcode)
-    
     # Hospital Letterhead with QR Code
     header_data = [
         [
