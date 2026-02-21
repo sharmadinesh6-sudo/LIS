@@ -981,12 +981,25 @@ def generate_pdf_report(patient_data, sample_data, results_data):
     story.append(patient_table)
     story.append(Spacer(1, 0.1*inch))
     
-    # UHID Barcode
+    # UHID Barcode - create as image
     barcode_label = Paragraph(f"<b>UHID Barcode:</b>", 
                              ParagraphStyle('BarcodeLabel', parent=styles['Normal'], fontSize=9,
                                           textColor=colors.HexColor('#64748B')))
     story.append(barcode_label)
-    story.append(barcode_drawing)
+    
+    # Generate barcode using code128
+    from reportlab.graphics.barcode import code128
+    from reportlab.graphics import renderPM
+    barcode_obj = code128.Code128(patient_data['uhid'], barHeight=0.4*inch, barWidth=1.0)
+    barcode_drawing = Drawing(2.5*inch, 0.6*inch)
+    barcode_drawing.add(barcode_obj)
+    
+    # Convert barcode to image
+    barcode_img_buffer = BytesIO()
+    renderPM.drawToFile(barcode_drawing, barcode_img_buffer, fmt='PNG')
+    barcode_img_buffer.seek(0)
+    barcode_image = RLImage(barcode_img_buffer, width=2.5*inch, height=0.6*inch)
+    story.append(barcode_image)
     story.append(Spacer(1, 0.2*inch))
     
     # Test Results Section
