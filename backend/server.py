@@ -857,6 +857,228 @@ async def get_dashboard_stats(current_user: User = Depends(get_current_user)):
         "tat_breaches": tat_breaches
     }
 
+# ==================== EMR INTEGRATION ENDPOINTS ====================
+
+class EMRPatientCreate(BaseModel):
+    """EMR Patient Registration - simplified for external systems"""
+    emr_patient_id: str  # Patient ID from EMR system
+    name: str
+    age: int
+    gender: str
+    phone: str
+    email: Optional[str] = None
+    address: Optional[str] = None
+    patient_type: str = "OPD"
+
+class EMRLabOrder(BaseModel):
+    """Lab order from EMR system"""
+    emr_order_id: str  # Order ID from EMR
+    uhid: Optional[str] = None  # If patient already exists
+    emr_patient_id: Optional[str] = None  # From EMR
+    patient_details: Optional[EMRPatientCreate] = None  # New patient data
+    sample_type: str
+    test_codes: List[str]  # Test codes like ['CBC001', 'LFT001']
+    ordered_by: str  # Doctor name
+    priority: str = "routine"  # routine, urgent, stat
+
+@api_router.post("/emr/patient/register")
+async def emr_register_patient(patient_data: EMRPatientCreate, current_user: User = Depends(get_current_user)):
+    """
+    EMR Integration: Register patient from external EMR system
+    Returns UHID for future reference
+    """
+    # Check if EMR patient already exists
+    existing = await db.patients.find_one({"phone": patient_data.phone}, {"_id": 0})
+    if existing:
+        return {
+            "status": "exists",
+            "message": "Patient already registered",
+            "uhid": existing['uhid'],
+            "patient_id": existing['id'],
+            "emr_patient_id": patient_data.emr_patient_id
+        }
+    
+    # Generate UHID
+    count = await db.patients.count_documents({}) + 1
+    uhid = f"UHID{count:06d}"
+    
+    patient = Patient(
+        uhid=uhid,
+        name=patient_data.name,
+        age=patient_data.age,
+        gender=patient_data.gender,
+        phone=patient_data.phone,
+        email=patient_data.email,
+        address=patient_data.address,
+        patient_type=patient_data.patient_type,
+        created_by=current_user.id
+    )
+    
+    doc = patient.model_dump()
+    doc['created_at'] = doc['created_at'].isoformat()
+    doc['emr_patient_id'] = patient_data.emr_patient_id
+    await db.patients.insert_one(doc)
+    
+    return {
+        "status": "created",
+        "message": "Patient registered successfully",
+        "uhid": uhid,
+        "patient_id": patient.id,
+        "emr_patient_id": patient_data.emr_patient_id
+    }
+
+@api_router.post("/emr/lab-order/create")
+async def emr_create_lab_order(order_data: EMRLabOrder, current_user: User = Depends(get_current_user)):
+    """
+    EMR Integration: Create lab order from doctor's prescription
+    Automatically registers patient if new, creates sample with tests
+    """
+    patient_id = None
+    uhid = None
+    
+    # Get or create patient
+    if order_data.uhid:
+        # Existing patient by UHID
+        patient = await db.patients.find_one({"uhid": order_data.uhid}, {"_id": 0})
+        if not patient:
+            raise HTTPException(status_code=404, detail="Patient not found with given UHID")
+        patient_id = patient['id']
+        uhid = patient['uhid']
+    elif order_data.emr_patient_id:
+        # Try to find by EMR ID
+        patient = await db.patients.find_one({"emr_patient_id": order_data.emr_patient_id}, {"_id": 0})
+        if patient:
+            patient_id = patient['id']
+            uhid = patient['uhid']
+    
+    # Create new patient if needed
+    if not patient_id and order_data.patient_details:
+        count = await db.patients.count_documents({}) + 1
+        uhid = f"UHID{count:06d}"
+        
+        patient = Patient(
+            uhid=uhid,
+            name=order_data.patient_details.name,
+            age=order_data.patient_details.age,
+            gender=order_data.patient_details.gender,
+            phone=order_data.patient_details.phone,
+            email=order_data.patient_details.email,
+            address=order_data.patient_details.address,
+            patient_type=order_data.patient_details.patient_type,
+            created_by=current_user.id
+        )
+        
+        doc = patient.model_dump()
+        doc['created_at'] = doc['created_at'].isoformat()
+        doc['emr_patient_id'] = order_data.patient_details.emr_patient_id
+        await db.patients.insert_one(doc)
+        patient_id = patient.id
+    
+    if not patient_id:
+        raise HTTPException(status_code=400, detail="Patient information required")
+    
+    # Get patient details
+    patient = await db.patients.find_one({"id": patient_id}, {"_id": 0})
+    
+    # Get tests by codes
+    test_list = []
+    for test_code in order_data.test_codes:
+        test = await db.test_configs.find_one({"test_code": test_code}, {"_id": 0})
+        if test:
+            test_list.append(TestItem(
+                test_id=test['id'],
+                test_name=test['test_name'],
+                price=test['price'],
+                tat_hours=test['tat_hours']
+            ))
+    
+    if not test_list:
+        raise HTTPException(status_code=404, detail="No valid tests found for given test codes")
+    
+    # Generate sample ID and barcode
+    count = await db.samples.count_documents({}) + 1
+    sample_id = f"SMP{count:08d}"
+    barcode_num = f"{count:012d}"
+    
+    # Calculate TAT deadline
+    max_tat = max([test.tat_hours for test in test_list])
+    tat_deadline = datetime.now(timezone.utc) + timedelta(hours=max_tat)
+    
+    sample = Sample(
+        sample_id=sample_id,
+        barcode=barcode_num,
+        patient_id=patient_id,
+        patient_name=patient['name'],
+        uhid=patient['uhid'],
+        tests=[test.model_dump() for test in test_list],
+        sample_type=order_data.sample_type,
+        collected_by=current_user.id,
+        tat_deadline=tat_deadline
+    )
+    
+    doc = sample.model_dump()
+    doc['collection_date'] = doc['collection_date'].isoformat()
+    doc['tat_deadline'] = doc['tat_deadline'].isoformat()
+    doc['created_at'] = doc['created_at'].isoformat()
+    doc['emr_order_id'] = order_data.emr_order_id
+    doc['ordered_by'] = order_data.ordered_by
+    doc['priority'] = order_data.priority
+    await db.samples.insert_one(doc)
+    
+    return {
+        "status": "success",
+        "message": "Lab order created successfully",
+        "uhid": uhid,
+        "patient_id": patient_id,
+        "patient_name": patient['name'],
+        "sample_id": sample_id,
+        "barcode": barcode_num,
+        "tests": [{"test_name": t.test_name, "tat_hours": t.tat_hours} for t in test_list],
+        "tat_deadline": tat_deadline.isoformat(),
+        "emr_order_id": order_data.emr_order_id
+    }
+
+@api_router.get("/emr/patient/{uhid}")
+async def emr_get_patient(uhid: str, current_user: User = Depends(get_current_user)):
+    """EMR Integration: Get patient details by UHID"""
+    patient = await db.patients.find_one({"uhid": uhid}, {"_id": 0})
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    
+    if isinstance(patient['created_at'], str):
+        patient['created_at'] = datetime.fromisoformat(patient['created_at'])
+    
+    return Patient(**patient)
+
+@api_router.get("/emr/results/patient/{patient_id}")
+async def emr_get_patient_results(patient_id: str, current_user: User = Depends(get_current_user)):
+    """EMR Integration: Get all results for a patient"""
+    results = await db.test_results.find({"patient_id": patient_id}, {"_id": 0}).to_list(1000)
+    for r in results:
+        if isinstance(r['created_at'], str):
+            r['created_at'] = datetime.fromisoformat(r['created_at'])
+        if isinstance(r['updated_at'], str):
+            r['updated_at'] = datetime.fromisoformat(r['updated_at'])
+    return results
+
+@api_router.get("/emr/sample/status/{sample_id}")
+async def emr_get_sample_status(sample_id: str, current_user: User = Depends(get_current_user)):
+    """EMR Integration: Get sample status by sample ID"""
+    sample = await db.samples.find_one({"sample_id": sample_id}, {"_id": 0})
+    if not sample:
+        raise HTTPException(status_code=404, detail="Sample not found")
+    
+    if isinstance(sample['collection_date'], str):
+        sample['collection_date'] = datetime.fromisoformat(sample['collection_date'])
+    if isinstance(sample['tat_deadline'], str):
+        sample['tat_deadline'] = datetime.fromisoformat(sample['tat_deadline'])
+    if isinstance(sample['created_at'], str):
+        sample['created_at'] = datetime.fromisoformat(sample['created_at'])
+    
+    return sample
+
+# ==================== GENERATE PDF REPORT ====================
+
 def generate_pdf_report(patient_data, sample_data, results_data):
     """Generate PDF report with hospital letterhead, QR code and barcode"""
     buffer = BytesIO()
