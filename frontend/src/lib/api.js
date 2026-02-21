@@ -25,6 +25,7 @@ export const createResult = (data) => axios.post(`${API}/results`, data);
 export const getResults = (params) => axios.get(`${API}/results`, { params });
 export const getResult = (id) => axios.get(`${API}/results/${id}`);
 export const updateResult = (id, data) => axios.put(`${API}/results/${id}`, data);
+export const downloadReport = (id) => axios.get(`${API}/results/${id}/report`, { responseType: 'blob' });
 
 // QC
 export const createQCEntry = (data) => axios.post(`${API}/qc`, data);
