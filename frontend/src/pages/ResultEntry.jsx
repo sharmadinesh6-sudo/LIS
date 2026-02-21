@@ -122,6 +122,29 @@ export default function ResultEntry() {
     }
   };
 
+  const handleDownloadReport = async (resultId, patient_id) => {
+    try {
+      toast.info('Generating PDF report...');
+      const response = await downloadReport(resultId);
+      
+      // Create blob and download
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `Report_${patient_id}_${resultId}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      
+      toast.success('Report downloaded successfully!');
+    } catch (error) {
+      toast.error('Failed to download report');
+      console.error('Download error:', error);
+    }
+  };
+
   const getValueColor = (status) => {
     switch (status) {
       case 'critical': return 'text-red-600 font-bold animate-pulse-critical';
