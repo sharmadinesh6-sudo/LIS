@@ -316,6 +316,7 @@ export default function ResultEntry() {
                   <TableHead>Has Critical</TableHead>
                   <TableHead>Date</TableHead>
                   <TableHead>Actions</TableHead>
+                  <TableHead>Report</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
