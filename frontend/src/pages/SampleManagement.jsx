@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { createSample, getSamples, getPatients, getTests, updateSampleStatus, rejectSample } from '@/lib/api';
 import { toast } from 'sonner';
-import { Plus, AlertCircle, Clock, CheckCircle, XCircle } from 'lucide-react';
+import { Plus, AlertCircle, Clock, CheckCircle, XCircle, Activity } from 'lucide-react';
 
 export default function SampleManagement() {
   const [samples, setSamples] = useState([]);
