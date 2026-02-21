@@ -9,7 +9,7 @@ import { ScrollText, User, Clock } from 'lucide-react';
 
 export default function AuditLogs() {
   const [logs, setLogs] = useState([]);
-  const [selectedModule, setSelectedModule] = useState('');
+  const [selectedModule, setSelectedModule] = useState('all');
 
   useEffect(() => {
     fetchLogs();
@@ -26,7 +26,7 @@ export default function AuditLogs() {
 
   const handleModuleFilter = (module) => {
     setSelectedModule(module);
-    fetchLogs(module || null);
+    fetchLogs(module === 'all' ? null : module);
   };
 
   const getActionBadge = (action) => {
