@@ -322,7 +322,7 @@ export default function ResultEntry() {
               <TableBody>
                 {results.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-slate-500 py-8">
+                    <TableCell colSpan={8} className="text-center text-slate-500 py-8">
                       No results found
                     </TableCell>
                   </TableRow>
@@ -368,6 +368,19 @@ export default function ResultEntry() {
                               <SelectItem value="finalized">Finalized</SelectItem>
                             </SelectContent>
                           </Select>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {['approved', 'finalized'].includes(result.status) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => handleDownloadReport(result.id, result.patient_id)}
+                            data-testid={`download-report-${result.id}`}
+                          >
+                            <Download className="h-4 w-4 mr-1" />
+                            PDF
+                          </Button>
                         )}
                       </TableCell>
                     </TableRow>
