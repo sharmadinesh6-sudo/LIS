@@ -858,9 +858,10 @@ async def get_dashboard_stats(current_user: User = Depends(get_current_user)):
     }
 
 def generate_pdf_report(patient_data, sample_data, results_data):
-    """Generate PDF report with hospital letterhead"""
+    """Generate PDF report with hospital letterhead, QR code and barcode"""
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=0.5*inch, bottomMargin=0.5*inch)
+    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=0.5*inch, bottomMargin=0.5*inch, 
+                          leftMargin=0.75*inch, rightMargin=0.75*inch)
     story = []
     styles = getSampleStyleSheet()
     
@@ -894,14 +895,56 @@ def generate_pdf_report(patient_data, sample_data, results_data):
         fontName='Helvetica-Bold'
     )
     
-    # Hospital Letterhead
-    story.append(Paragraph("ABC HOSPITAL", title_style))
+    # Generate QR Code for report verification
+    result_id = results_data[0]['id']
+    qr_data = {
+        'type': 'lab_report',
+        'hospital': 'ABC Hospital, Panipat',
+        'result_id': result_id,
+        'uhid': patient_data['uhid'],
+        'sample_id': sample_data['sample_id'],
+        'patient_name': patient_data['name'],
+        'generated_at': datetime.now(timezone.utc).isoformat(),
+        'verification_hash': hashlib.sha256(f"{result_id}{patient_data['uhid']}{sample_data['sample_id']}".encode()).hexdigest()[:16]
+    }
+    
+    qr = qrcode.QRCode(version=1, box_size=10, border=2)
+    qr.add_data(json.dumps(qr_data))
+    qr.make(fit=True)
+    qr_img = qr.make_image(fill_color="black", back_color="white")
+    
+    # Save QR code to buffer
+    qr_buffer = BytesIO()
+    qr_img.save(qr_buffer, format='PNG')
+    qr_buffer.seek(0)
+    qr_image = RLImage(qr_buffer, width=1.2*inch, height=1.2*inch)
+    
+    # Generate UHID Barcode
+    barcode_drawing = Drawing(2.5*inch, 0.6*inch)
+    barcode_code = code128.Code128(patient_data['uhid'], barHeight=0.4*inch, barWidth=1.2)
+    barcode_drawing.add(barcode_code)
+    
+    # Hospital Letterhead with QR Code
+    header_data = [
+        [
+            Paragraph("ABC HOSPITAL", title_style),
+            qr_image
+        ]
+    ]
+    header_table = Table(header_data, colWidths=[5.3*inch, 1.5*inch])
+    header_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+        ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP')
+    ]))
+    story.append(header_table)
+    
     story.append(Paragraph("NABL Accredited Laboratory (ISO 15189:2022)", header_style))
     story.append(Paragraph("Panipat, Haryana | Phone: +91-XXXXXXXXXX | Email: lab@abchospital.com", header_style))
     story.append(Spacer(1, 0.1*inch))
     
     # Horizontal line
-    line_table = Table([['']], colWidths=[7.5*inch])
+    line_table = Table([['']], colWidths=[6.8*inch])
     line_table.setStyle(TableStyle([
         ('LINEABOVE', (0, 0), (-1, 0), 2, colors.HexColor('#0ea5e9')),
     ]))
@@ -915,7 +958,7 @@ def generate_pdf_report(patient_data, sample_data, results_data):
     story.append(Paragraph("LABORATORY TEST REPORT", report_title))
     story.append(Spacer(1, 0.1*inch))
     
-    # Patient Information Section
+    # Patient Information Section with UHID Barcode
     story.append(Paragraph("PATIENT INFORMATION", section_style))
     
     patient_info = [
@@ -927,7 +970,7 @@ def generate_pdf_report(patient_data, sample_data, results_data):
          'Report Date:', datetime.now(timezone.utc).strftime('%d-%b-%Y %I:%M %p')]
     ]
     
-    patient_table = Table(patient_info, colWidths=[1.5*inch, 2.2*inch, 1.5*inch, 2.3*inch])
+    patient_table = Table(patient_info, colWidths=[1.3*inch, 2*inch, 1.3*inch, 2.2*inch])
     patient_table.setStyle(TableStyle([
         ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#F1F5F9')),
         ('BACKGROUND', (2, 0), (2, -1), colors.HexColor('#F1F5F9')),
@@ -941,7 +984,15 @@ def generate_pdf_report(patient_data, sample_data, results_data):
         ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0'))
     ]))
     story.append(patient_table)
-    story.append(Spacer(1, 0.3*inch))
+    story.append(Spacer(1, 0.1*inch))
+    
+    # UHID Barcode
+    barcode_label = Paragraph(f"<b>UHID Barcode:</b>", 
+                             ParagraphStyle('BarcodeLabel', parent=styles['Normal'], fontSize=9,
+                                          textColor=colors.HexColor('#64748B')))
+    story.append(barcode_label)
+    story.append(barcode_drawing)
+    story.append(Spacer(1, 0.2*inch))
     
     # Test Results Section
     for result in results_data:
@@ -952,19 +1003,6 @@ def generate_pdf_report(patient_data, sample_data, results_data):
         
         for param in result['parameters']:
             # Color coding for values
-            if param['status'] == 'critical':
-                value_color = colors.HexColor('#DC2626')
-                bg_color = colors.HexColor('#FEF2F2')
-            elif param['status'] == 'high':
-                value_color = colors.HexColor('#DC2626')
-                bg_color = colors.white
-            elif param['status'] == 'low':
-                value_color = colors.HexColor('#2563EB')
-                bg_color = colors.white
-            else:
-                value_color = colors.black
-                bg_color = colors.white
-            
             status_text = param['status'].upper()
             if param['status'] == 'critical':
                 status_text = '*** CRITICAL ***'
@@ -983,7 +1021,7 @@ def generate_pdf_report(patient_data, sample_data, results_data):
                 status_text
             ])
         
-        result_table = Table(result_data, colWidths=[2.5*inch, 1.2*inch, 1*inch, 1.8*inch, 1*inch])
+        result_table = Table(result_data, colWidths=[2.2*inch, 1.1*inch, 0.9*inch, 1.6*inch, 1*inch])
         
         # Apply styles
         table_style = [
@@ -1035,26 +1073,48 @@ def generate_pdf_report(patient_data, sample_data, results_data):
         
         story.append(Spacer(1, 0.2*inch))
     
+    # QR Code Information Box
+    story.append(Spacer(1, 0.2*inch))
+    qr_info_style = ParagraphStyle('QRInfo', parent=styles['Normal'], fontSize=8,
+                                   textColor=colors.HexColor('#64748B'), leftIndent=5,
+                                   rightIndent=5, spaceAfter=5)
+    
+    qr_info_data = [[
+        Paragraph("<b>Report Verification:</b><br/>Scan the QR code above to verify this report's authenticity. "
+                 f"Verification Hash: <font name='Courier'>{qr_data['verification_hash']}</font>", qr_info_style)
+    ]]
+    qr_info_table = Table(qr_info_data, colWidths=[6.8*inch])
+    qr_info_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#F1F5F9')),
+        ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#0ea5e9')),
+        ('TOPPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('LEFTPADDING', (0, 0), (-1, -1), 10),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 10)
+    ]))
+    story.append(qr_info_table)
+    
     # Footer with signatures
-    story.append(Spacer(1, 0.3*inch))
+    story.append(Spacer(1, 0.2*inch))
     
     footer_data = [
         ['', ''],
         ['_____________________', '_____________________'],
         ['Lab Technician', 'Pathologist'],
         ['', ''],
-        ['Note: This is a digitally generated report from ABC Hospital NABL-accredited laboratory.', '']
+        ['Note: This is a digitally generated report from ABC Hospital NABL-accredited laboratory.', ''],
+        [f'Report ID: {result_id[:8].upper()}', f'Generated: {datetime.now(timezone.utc).strftime("%d-%b-%Y %I:%M %p UTC")}']
     ]
     
-    footer_table = Table(footer_data, colWidths=[3.75*inch, 3.75*inch])
+    footer_table = Table(footer_data, colWidths=[3.4*inch, 3.4*inch])
     footer_table.setStyle(TableStyle([
-        ('ALIGN', (0, 0), (0, -2), 'LEFT'),
-        ('ALIGN', (1, 0), (1, -2), 'RIGHT'),
+        ('ALIGN', (0, 0), (0, -3), 'LEFT'),
+        ('ALIGN', (1, 0), (1, -3), 'RIGHT'),
         ('FONTSIZE', (0, 0), (-1, -1), 8),
         ('TEXTCOLOR', (0, 0), (-1, -2), colors.HexColor('#0F172A')),
         ('TEXTCOLOR', (0, -1), (-1, -1), colors.HexColor('#64748B')),
         ('FONTNAME', (0, 1), (-1, 2), 'Helvetica-Bold'),
-        ('SPAN', (0, -1), (-1, -1)),
+        ('SPAN', (0, -2), (-1, -2)),
     ]))
     story.append(footer_table)
     
