@@ -1090,12 +1090,14 @@ async def download_report(result_id: str, current_user: User = Depends(get_curre
     await log_audit(current_user, "DOWNLOAD_REPORT", "test_results", 
                    {"result_id": result_id, "patient_id": patient['id']})
     
-    # Return PDF
-    return FileResponse(
-        path=None,
+    # Return PDF as streaming response
+    pdf_buffer.seek(0)
+    return StreamingResponse(
+        pdf_buffer,
         media_type='application/pdf',
-        filename=f"Report_{patient['uhid']}_{sample['sample_id']}.pdf",
-        content=pdf_buffer.getvalue()
+        headers={
+            'Content-Disposition': f'attachment; filename="Report_{patient["uhid"]}_{sample["sample_id"]}.pdf"'
+        }
     )
 
 # ==================== INCLUDE ROUTER ====================
