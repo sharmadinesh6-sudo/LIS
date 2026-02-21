@@ -917,7 +917,7 @@ def generate_pdf_report(patient_data, sample_data, results_data):
         ['Age/Gender:', f"{patient_data['age']} Years / {patient_data['gender'].capitalize()}", 
          'Phone:', patient_data['phone']],
         ['Sample ID:', sample_data['sample_id'], 'Sample Type:', sample_data['sample_type']],
-        ['Collection Date:', datetime.fromisoformat(sample_data['collection_date']).strftime('%d-%b-%Y %I:%M %p'),
+        ['Collection Date:', sample_data['collection_date'].strftime('%d-%b-%Y %I:%M %p') if isinstance(sample_data['collection_date'], datetime) else sample_data['collection_date'],
          'Report Date:', datetime.now(timezone.utc).strftime('%d-%b-%Y %I:%M %p')]
     ]
     
