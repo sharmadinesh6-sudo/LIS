@@ -851,6 +851,253 @@ async def get_dashboard_stats(current_user: User = Depends(get_current_user)):
         "tat_breaches": tat_breaches
     }
 
+def generate_pdf_report(patient_data, sample_data, results_data):
+    """Generate PDF report with hospital letterhead"""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=0.5*inch, bottomMargin=0.5*inch)
+    story = []
+    styles = getSampleStyleSheet()
+    
+    # Custom styles
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=20,
+        textColor=colors.HexColor('#0F172A'),
+        spaceAfter=6,
+        alignment=TA_CENTER,
+        fontName='Helvetica-Bold'
+    )
+    
+    header_style = ParagraphStyle(
+        'Header',
+        parent=styles['Normal'],
+        fontSize=10,
+        textColor=colors.HexColor('#64748B'),
+        alignment=TA_CENTER,
+        spaceAfter=20
+    )
+    
+    section_style = ParagraphStyle(
+        'Section',
+        parent=styles['Heading2'],
+        fontSize=12,
+        textColor=colors.HexColor('#0F172A'),
+        spaceAfter=10,
+        spaceBefore=15,
+        fontName='Helvetica-Bold'
+    )
+    
+    # Hospital Letterhead
+    story.append(Paragraph("ABC HOSPITAL", title_style))
+    story.append(Paragraph("NABL Accredited Laboratory (ISO 15189:2022)", header_style))
+    story.append(Paragraph("Panipat, Haryana | Phone: +91-XXXXXXXXXX | Email: lab@abchospital.com", header_style))
+    story.append(Spacer(1, 0.1*inch))
+    
+    # Horizontal line
+    line_table = Table([['']], colWidths=[7.5*inch])
+    line_table.setStyle(TableStyle([
+        ('LINEABOVE', (0, 0), (-1, 0), 2, colors.HexColor('#0ea5e9')),
+    ]))
+    story.append(line_table)
+    story.append(Spacer(1, 0.2*inch))
+    
+    # Report Title
+    report_title = ParagraphStyle('ReportTitle', parent=styles['Heading1'], fontSize=14, 
+                                   textColor=colors.HexColor('#0F172A'), alignment=TA_CENTER, 
+                                   spaceAfter=15, fontName='Helvetica-Bold')
+    story.append(Paragraph("LABORATORY TEST REPORT", report_title))
+    story.append(Spacer(1, 0.1*inch))
+    
+    # Patient Information Section
+    story.append(Paragraph("PATIENT INFORMATION", section_style))
+    
+    patient_info = [
+        ['UHID:', patient_data['uhid'], 'Patient Name:', patient_data['name']],
+        ['Age/Gender:', f"{patient_data['age']} Years / {patient_data['gender'].capitalize()}", 
+         'Phone:', patient_data['phone']],
+        ['Sample ID:', sample_data['sample_id'], 'Sample Type:', sample_data['sample_type']],
+        ['Collection Date:', datetime.fromisoformat(sample_data['collection_date']).strftime('%d-%b-%Y %I:%M %p'),
+         'Report Date:', datetime.now(timezone.utc).strftime('%d-%b-%Y %I:%M %p')]
+    ]
+    
+    patient_table = Table(patient_info, colWidths=[1.5*inch, 2.2*inch, 1.5*inch, 2.3*inch])
+    patient_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#F1F5F9')),
+        ('BACKGROUND', (2, 0), (2, -1), colors.HexColor('#F1F5F9')),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#0F172A')),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTNAME', (2, 0), (2, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0'))
+    ]))
+    story.append(patient_table)
+    story.append(Spacer(1, 0.3*inch))
+    
+    # Test Results Section
+    for result in results_data:
+        story.append(Paragraph(f"TEST: {result['test_name']}", section_style))
+        
+        # Results table
+        result_data = [['Parameter', 'Result', 'Unit', 'Reference Range', 'Status']]
+        
+        for param in result['parameters']:
+            # Color coding for values
+            if param['status'] == 'critical':
+                value_color = colors.HexColor('#DC2626')
+                bg_color = colors.HexColor('#FEF2F2')
+            elif param['status'] == 'high':
+                value_color = colors.HexColor('#DC2626')
+                bg_color = colors.white
+            elif param['status'] == 'low':
+                value_color = colors.HexColor('#2563EB')
+                bg_color = colors.white
+            else:
+                value_color = colors.black
+                bg_color = colors.white
+            
+            status_text = param['status'].upper()
+            if param['status'] == 'critical':
+                status_text = '*** CRITICAL ***'
+            elif param['status'] == 'high':
+                status_text = 'HIGH'
+            elif param['status'] == 'low':
+                status_text = 'LOW'
+            else:
+                status_text = 'NORMAL'
+            
+            result_data.append([
+                param['parameter_name'],
+                param['value'],
+                param['unit'],
+                param['ref_range'],
+                status_text
+            ])
+        
+        result_table = Table(result_data, colWidths=[2.5*inch, 1.2*inch, 1*inch, 1.8*inch, 1*inch])
+        
+        # Apply styles
+        table_style = [
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0F172A')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('ALIGN', (1, 1), (1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 10),
+            ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0'))
+        ]
+        
+        # Apply color coding to rows
+        for i, param in enumerate(result['parameters'], start=1):
+            if param['status'] == 'critical':
+                table_style.extend([
+                    ('BACKGROUND', (0, i), (-1, i), colors.HexColor('#FEF2F2')),
+                    ('TEXTCOLOR', (1, i), (1, i), colors.HexColor('#DC2626')),
+                    ('TEXTCOLOR', (4, i), (4, i), colors.HexColor('#DC2626')),
+                    ('FONTNAME', (1, i), (1, i), 'Helvetica-Bold'),
+                    ('FONTNAME', (4, i), (4, i), 'Helvetica-Bold'),
+                ])
+            elif param['status'] == 'high':
+                table_style.extend([
+                    ('TEXTCOLOR', (1, i), (1, i), colors.HexColor('#DC2626')),
+                    ('TEXTCOLOR', (4, i), (4, i), colors.HexColor('#DC2626')),
+                    ('FONTNAME', (1, i), (1, i), 'Helvetica-Bold'),
+                ])
+            elif param['status'] == 'low':
+                table_style.extend([
+                    ('TEXTCOLOR', (1, i), (1, i), colors.HexColor('#2563EB')),
+                    ('TEXTCOLOR', (4, i), (4, i), colors.HexColor('#2563EB')),
+                    ('FONTNAME', (1, i), (1, i), 'Helvetica-Bold'),
+                ])
+        
+        result_table.setStyle(TableStyle(table_style))
+        story.append(result_table)
+        
+        # Interpretation if present
+        if result.get('interpretation'):
+            story.append(Spacer(1, 0.1*inch))
+            interp_style = ParagraphStyle('Interpretation', parent=styles['Normal'], 
+                                          fontSize=9, textColor=colors.HexColor('#475569'),
+                                          leftIndent=10)
+            story.append(Paragraph(f"<b>Interpretation:</b> {result['interpretation']}", interp_style))
+        
+        story.append(Spacer(1, 0.2*inch))
+    
+    # Footer with signatures
+    story.append(Spacer(1, 0.3*inch))
+    
+    footer_data = [
+        ['', ''],
+        ['_____________________', '_____________________'],
+        ['Lab Technician', 'Pathologist'],
+        ['', ''],
+        ['Note: This is a digitally generated report from ABC Hospital NABL-accredited laboratory.', '']
+    ]
+    
+    footer_table = Table(footer_data, colWidths=[3.75*inch, 3.75*inch])
+    footer_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (0, -2), 'LEFT'),
+        ('ALIGN', (1, 0), (1, -2), 'RIGHT'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('TEXTCOLOR', (0, 0), (-1, -2), colors.HexColor('#0F172A')),
+        ('TEXTCOLOR', (0, -1), (-1, -1), colors.HexColor('#64748B')),
+        ('FONTNAME', (0, 1), (-1, 2), 'Helvetica-Bold'),
+        ('SPAN', (0, -1), (-1, -1)),
+    ]))
+    story.append(footer_table)
+    
+    # Build PDF
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+@api_router.get("/results/{result_id}/report")
+async def download_report(result_id: str, current_user: User = Depends(get_current_user)):
+    """Generate and download PDF report"""
+    # Get result
+    result = await db.test_results.find_one({"id": result_id}, {"_id": 0})
+    if not result:
+        raise HTTPException(status_code=404, detail="Result not found")
+    
+    # Get patient
+    patient = await db.patients.find_one({"id": result['patient_id']}, {"_id": 0})
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+    
+    # Get sample
+    sample = await db.samples.find_one({"id": result['sample_id']}, {"_id": 0})
+    if not sample:
+        raise HTTPException(status_code=404, detail="Sample not found")
+    
+    # Convert datetime strings
+    if isinstance(result['created_at'], str):
+        result['created_at'] = datetime.fromisoformat(result['created_at'])
+    if isinstance(patient['created_at'], str):
+        patient['created_at'] = datetime.fromisoformat(patient['created_at'])
+    if isinstance(sample['collection_date'], str):
+        sample['collection_date'] = datetime.fromisoformat(sample['collection_date'])
+    
+    # Generate PDF
+    pdf_buffer = generate_pdf_report(patient, sample, [result])
+    
+    # Log action
+    await log_audit(current_user, "DOWNLOAD_REPORT", "test_results", 
+                   {"result_id": result_id, "patient_id": patient['id']})
+    
+    # Return PDF
+    return FileResponse(
+        path=None,
+        media_type='application/pdf',
+        filename=f"Report_{patient['uhid']}_{sample['sample_id']}.pdf",
+        content=pdf_buffer.getvalue()
+    )
+
 # ==================== INCLUDE ROUTER ====================
 
 app.include_router(api_router)
